@@ -1,0 +1,92 @@
+package mockauth
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"mcpProxy/internal/oauth"
+)
+
+func TestAuthorizationCodeAndRefreshFlow(t *testing.T) {
+	cfg := &Config{
+		Issuer:          "http://mock.local",
+		DefaultUserID:   "u1",
+		DefaultUserName: "tester",
+		DefaultScope:    "mcp.invoke mcp.read",
+		ClientID:        "local-mcp-proxy",
+		AccessTTL:       time.Minute,
+		RefreshTTL:      time.Hour,
+		CodeTTL:         time.Minute,
+		AutoApprove:     true,
+	}
+	handler := NewServer(cfg)
+
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	challenge := oauth.ChallengeS256(verifier)
+	authorizeReq := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id=local-mcp-proxy&redirect_uri=http://127.0.0.1:8765/auth/callback&scope=mcp.invoke+mcp.read&state=s1&code_challenge="+url.QueryEscape(challenge)+"&code_challenge_method=S256", nil)
+	authorizeRes := httptest.NewRecorder()
+	handler.ServeHTTP(authorizeRes, authorizeReq)
+	if authorizeRes.Code != http.StatusFound {
+		t.Fatalf("authorize status: got %d", authorizeRes.Code)
+	}
+	location := authorizeRes.Header().Get("Location")
+	parsed, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("parse redirect location: %v", err)
+	}
+	code := parsed.Query().Get("code")
+	if code == "" {
+		t.Fatalf("expected authorization code in redirect")
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("client_id", "local-mcp-proxy")
+	form.Set("redirect_uri", "http://127.0.0.1:8765/auth/callback")
+	form.Set("code", code)
+	form.Set("code_verifier", verifier)
+	tokenReq := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRes := httptest.NewRecorder()
+	handler.ServeHTTP(tokenRes, tokenReq)
+	if tokenRes.Code != http.StatusOK {
+		t.Fatalf("token status: got %d body=%s", tokenRes.Code, tokenRes.Body.String())
+	}
+	var tokenPayload map[string]any
+	if err := json.Unmarshal(tokenRes.Body.Bytes(), &tokenPayload); err != nil {
+		t.Fatalf("decode token response: %v", err)
+	}
+	accessToken, _ := tokenPayload["access_token"].(string)
+	refreshToken, _ := tokenPayload["refresh_token"].(string)
+	if accessToken == "" || refreshToken == "" {
+		t.Fatalf("expected access and refresh tokens")
+	}
+
+	introspectReq := httptest.NewRequest(http.MethodPost, "/oauth2/introspect", strings.NewReader(`{"token":"`+accessToken+`"}`))
+	introspectReq.Header.Set("Content-Type", "application/json")
+	introspectRes := httptest.NewRecorder()
+	handler.ServeHTTP(introspectRes, introspectReq)
+	if introspectRes.Code != http.StatusOK {
+		t.Fatalf("introspect status: got %d", introspectRes.Code)
+	}
+	if !strings.Contains(introspectRes.Body.String(), `"active":true`) {
+		t.Fatalf("expected active introspection body, got %s", introspectRes.Body.String())
+	}
+
+	refreshForm := url.Values{}
+	refreshForm.Set("grant_type", "refresh_token")
+	refreshForm.Set("client_id", "local-mcp-proxy")
+	refreshForm.Set("refresh_token", refreshToken)
+	refreshReq := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(refreshForm.Encode()))
+	refreshReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	refreshRes := httptest.NewRecorder()
+	handler.ServeHTTP(refreshRes, refreshReq)
+	if refreshRes.Code != http.StatusOK {
+		t.Fatalf("refresh status: got %d body=%s", refreshRes.Code, refreshRes.Body.String())
+	}
+}

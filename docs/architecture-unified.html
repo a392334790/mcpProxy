@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Gateway 总体架构图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: #f8fafc;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #1e293b;
+            font-size: 1.8em;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #64748b;
+            font-size: 0.9em;
+            margin-bottom: 30px;
+        }
+        
+        .diagram-wrapper {
+            width: 100%;
+            overflow-x: auto;
+        }
+        
+        .diagram-container {
+            position: relative;
+            width: 100%;
+            min-width: 900px;
+            padding-bottom: 60%;
+        }
+        
+        .diagram-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .node {
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .node:hover {
+            transform: scale(1.05);
+        }
+        
+        .node-rect {
+            rx: 12;
+            ry: 12;
+            stroke-width: 2;
+        }
+        
+        .node-text {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            font-weight: 600;
+            fill: #1e293b;
+        }
+        
+        .node-desc {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            font-size: 11px;
+            fill: #64748b;
+        }
+        
+        .flow-line {
+            fill: none;
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        
+        .flow-line.main {
+            stroke: #6366f1;
+        }
+        .flow-line.oauth {
+            stroke: #0284c7;
+            stroke-dasharray: 8, 4;
+        }
+        .flow-line.validate {
+            stroke: #16a34a;
+        }
+        
+        .flow-arrow {
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        
+        .flow-label {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            font-size: 11px;
+            font-weight: 500;
+        }
+        .flow-label.main { fill: #6366f1; }
+        .flow-label.oauth { fill: #0284c7; }
+        .flow-label.validate { fill: #16a34a; }
+        
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-top: 25px;
+            padding: 15px;
+            background: #f8fafc;
+            border-radius: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .legend-line {
+            width: 50px;
+            height: 3px;
+            border-radius: 2px;
+        }
+        .legend-line.main { background: #6366f1; }
+        .legend-line.oauth { 
+            background: repeating-linear-gradient(90deg, #0284c7 0, #0284c7 8px, transparent 8px, transparent 12px);
+        }
+        .legend-line.validate { background: #16a34a; }
+        
+        .legend-text {
+            font-size: 0.85em;
+            color: #475569;
+        }
+        
+        .legend-badge {
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 600;
+            color: white;
+        }
+        .legend-badge.main { background: #6366f1; }
+        .legend-badge.oauth { background: #0284c7; }
+        .legend-badge.validate { background: #16a34a; }
+        
+        @media (max-width: 768px) {
+            .container { padding: 15px; }
+            h1 { font-size: 1.4em; }
+            .diagram-container { min-width: 700px; padding-bottom: 80%; }
+            .legend { gap: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MCP Gateway 总体架构图</h1>
+        <p class="subtitle">三种流程融合展示：请求主链路、OAuth 登录流程、Token 校验流程</p>
+        
+        <div class="diagram-wrapper">
+            <div class="diagram-container">
+                <svg class="diagram-svg" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet">
+                    <defs>
+                        <marker id="arrow-main" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+                            <path d="M0,0 L0,12 L12,6 z" fill="#6366f1"/>
+                        </marker>
+                        <marker id="arrow-oauth" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+                            <path d="M0,0 L0,12 L12,6 z" fill="#0284c7"/>
+                        </marker>
+                        <marker id="arrow-validate" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+                            <path d="M0,0 L0,12 L12,6 z" fill="#16a34a"/>
+                        </marker>
+                        <marker id="arrow-oauth-back" markerWidth="12" markerHeight="12" refX="2" refY="6" orient="auto">
+                            <path d="M12,0 L12,12 L0,6 z" fill="#0284c7"/>
+                        </marker>
+                    </defs>
+                    
+                    <!-- 节点定义 -->
+                    <!-- 第三方智能体 -->
+                    <g class="node" transform="translate(50, 80)">
+                        <rect class="node-rect" x="0" y="0" width="140" height="70" fill="#eef2ff" stroke="#a5b4fc"/>
+                        <text class="node-text" x="70" y="30" text-anchor="middle" font-size="14">🤖 第三方智能体</text>
+                        <text class="node-desc" x="70" y="50" text-anchor="middle">MCP Consumer</text>
+                    </g>
+                    
+                    <!-- 本地 Auth Proxy -->
+                    <g class="node" transform="translate(280, 55)">
+                        <rect class="node-rect" x="0" y="0" width="160" height="120" fill="#fce7f3" stroke="#f9a8d4"/>
+                        <text class="node-text" x="80" y="35" text-anchor="middle" font-size="14">🔐 本地 Auth Proxy</text>
+                        <text class="node-desc" x="80" y="55" text-anchor="middle">127.0.0.1:8765</text>
+                        <text class="node-desc" x="80" y="75" text-anchor="middle">Token 管理</text>
+                        <text class="node-desc" x="80" y="95" text-anchor="middle">请求转发</text>
+                    </g>
+                    
+                    <!-- 系统浏览器 -->
+                    <g class="node" transform="translate(50, 265)">
+                        <rect class="node-rect" x="0" y="0" width="140" height="70" fill="#e0f2fe" stroke="#7dd3fc"/>
+                        <text class="node-text" x="70" y="30" text-anchor="middle" font-size="14">🌐 系统浏览器</text>
+                        <text class="node-desc" x="70" y="50" text-anchor="middle">用户登录界面</text>
+                    </g>
+                    
+                    <!-- 公司鉴权中心 -->
+                    <g class="node" transform="translate(530, 120)">
+                        <rect class="node-rect" x="0" y="0" width="160" height="150" fill="#dcfce7" stroke="#86efac"/>
+                        <text class="node-text" x="80" y="35" text-anchor="middle" font-size="14">🔑 公司鉴权中心</text>
+                        <text class="node-desc" x="80" y="60" text-anchor="middle">OAuth2 Server</text>
+                        <text class="node-desc" x="80" y="85" text-anchor="middle">• 授权端点</text>
+                        <text class="node-desc" x="80" y="105" text-anchor="middle">• Token 端点</text>
+                        <text class="node-desc" x="80" y="125" text-anchor="middle">• 校验端点</text>
+                    </g>
+                    
+                    <!-- MCP Gateway -->
+                    <g class="node" transform="translate(780, 55)">
+                        <rect class="node-rect" x="0" y="0" width="160" height="120" fill="#fef3c7" stroke="#fcd34d"/>
+                        <text class="node-text" x="80" y="35" text-anchor="middle" font-size="14">🚪 MCP Gateway</text>
+                        <text class="node-desc" x="80" y="55" text-anchor="middle">cloud-mcp-gateway</text>
+                        <text class="node-desc" x="80" y="75" text-anchor="middle">Token 校验</text>
+                        <text class="node-desc" x="80" y="95" text-anchor="middle">身份透传</text>
+                    </g>
+                    
+                    <!-- 下游 MCP 服务 -->
+                    <g class="node" transform="translate(780, 265)">
+                        <rect class="node-rect" x="0" y="0" width="160" height="70" fill="#cffafe" stroke="#67e8f9"/>
+                        <text class="node-text" x="80" y="30" text-anchor="middle" font-size="14">⚙️ 下游 MCP 服务</text>
+                        <text class="node-desc" x="80" y="50" text-anchor="middle">业务处理</text>
+                    </g>
+                    
+                    <!-- ========== 流程连线 ========== -->
+                    
+                    <!-- 流程1: 请求主链路 (紫色实线) -->
+                    <!-- 智能体 → Proxy -->
+                    <path class="flow-line main" d="M 190 115 L 280 115" marker-end="url(#arrow-main)"/>
+                    <text class="flow-label main" x="235" y="105" text-anchor="middle">POST /mcp</text>
+                    
+                    <!-- Proxy → Gateway -->
+                    <path class="flow-line main" d="M 440 115 L 780 115" marker-end="url(#arrow-main)"/>
+                    <text class="flow-label main" x="610" y="105" text-anchor="middle">Bearer Token</text>
+                    
+                    <!-- Gateway → MCP服务 -->
+                    <path class="flow-line main" d="M 860 175 L 860 265" marker-end="url(#arrow-main)"/>
+                    <text class="flow-label main" x="890" y="220" text-anchor="start">转发</text>
+                    
+                    <!-- 流程2: OAuth 登录流程 (蓝色虚线) -->
+                    <!-- Proxy ↔ 浏览器 -->
+                    <path class="flow-line oauth" d="M 280 140 Q 230 140 230 200 Q 230 265 190 300" marker-end="url(#arrow-oauth)"/>
+                    <text class="flow-label oauth" x="200" y="220" text-anchor="middle">PKCE 授权</text>
+                    
+                    <path class="flow-line oauth" d="M 190 320 Q 240 320 240 260 Q 240 175 280 175" marker-end="url(#arrow-oauth)"/>
+                    
+                    <!-- 浏览器 ↔ 鉴权中心 -->
+                    <path class="flow-line oauth" d="M 190 300 Q 350 300 450 280 Q 530 260 530 200" marker-end="url(#arrow-oauth)"/>
+                    <text class="flow-label oauth" x="360" y="295" text-anchor="middle">OAuth2 授权</text>
+                    
+                    <!-- Proxy → 鉴权中心 (换Token) -->
+                    <path class="flow-line oauth" d="M 440 150 Q 480 150 480 180 Q 480 195 530 195" marker-end="url(#arrow-oauth)"/>
+                    <text class="flow-label oauth" x="485" y="165" text-anchor="start">换Token</text>
+                    
+                    <!-- 流程3: Token 校验流程 (绿色实线) -->
+                    <!-- Gateway → 鉴权中心 -->
+                    <path class="flow-line validate" d="M 780 140 Q 720 140 720 180 Q 720 195 690 195" marker-end="url(#arrow-validate)"/>
+                    <text class="flow-label validate" x="735" y="165" text-anchor="middle">introspect</text>
+                    
+                    <!-- ========== 流程编号标注 ========== -->
+                    
+                    <!-- 流程1 标注 -->
+                    <g transform="translate(50, 20)">
+                        <rect x="0" y="0" width="60" height="24" rx="12" fill="#6366f1"/>
+                        <text x="30" y="16" text-anchor="middle" fill="white" font-size="11" font-weight="600">流程1</text>
+                    </g>
+                    
+                    <!-- 流程2 标注 -->
+                    <g transform="translate(50, 400)">
+                        <rect x="0" y="0" width="60" height="24" rx="12" fill="#0284c7"/>
+                        <text x="30" y="16" text-anchor="middle" fill="white" font-size="11" font-weight="600">流程2</text>
+                    </g>
+                    
+                    <!-- 流程3 标注 -->
+                    <g transform="translate(780, 400)">
+                        <rect x="0" y="0" width="60" height="24" rx="12" fill="#16a34a"/>
+                        <text x="30" y="16" text-anchor="middle" fill="white" font-size="11" font-weight="600">流程3</text>
+                    </g>
+                    
+                    <!-- 流程说明文字 -->
+                    <text x="120" y="36" fill="#6366f1" font-size="12" font-weight="500">请求主链路：智能体 → Proxy → Gateway → MCP服务</text>
+                    <text x="120" y="416" fill="#0284c7" font-size="12" font-weight="500">OAuth 登录流程：首次访问无 Token 时触发</text>
+                    <text x="850" y="416" fill="#16a34a" font-size="12" font-weight="500">Token 校验流程：每次请求时执行</text>
+                    
+                    <!-- 组件角色说明 -->
+                    <g transform="translate(50, 460)">
+                        <rect x="0" y="0" width="900" height="110" rx="8" fill="#f8fafc" stroke="#e2e8f0"/>
+                        <text x="20" y="25" fill="#1e293b" font-size="13" font-weight="600">组件角色说明</text>
+                        
+                        <text x="20" y="50" fill="#475569" font-size="11">🤖 <tspan font-weight="500">第三方智能体</tspan>：仅作为 MCP Consumer，不直接参与 OAuth 登录流程</text>
+                        <text x="20" y="70" fill="#475569" font-size="11">🔐 <tspan font-weight="500">本地 Auth Proxy</tspan>：负责浏览器登录、Token 存储、自动刷新、请求转发</text>
+                        <text x="20" y="90" fill="#475569" font-size="11">🔑 <tspan font-weight="500">公司鉴权中心</tspan>：提供授权、换 Token、校验 Token 等 OAuth2 标准能力</text>
+                        
+                        <text x="480" y="50" fill="#475569" font-size="11">🌐 <tspan font-weight="500">系统浏览器</tspan>：用户登录界面，完成 OAuth 授权</text>
+                        <text x="480" y="70" fill="#475569" font-size="11">🚪 <tspan font-weight="500">MCP Gateway</tspan>：校验 Bearer Token，提取身份信息，注入身份头转发</text>
+                        <text x="480" y="90" fill="#475569" font-size="11">⚙️ <tspan font-weight="500">下游 MCP 服务</tspan>：接收网关转发请求，可按用户身份做进一步授权</text>
+                    </g>
+                </svg>
+            </div>
+        </div>
+        
+        <!-- 图例 -->
+        <div class="legend">
+            <div class="legend-item">
+                <span class="legend-badge main">流程1</span>
+                <div class="legend-line main"></div>
+                <span class="legend-text">请求主链路</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-badge oauth">流程2</span>
+                <div class="legend-line oauth"></div>
+                <span class="legend-text">OAuth 登录流程</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-badge validate">流程3</span>
+                <div class="legend-line validate"></div>
+                <span class="legend-text">Token 校验流程</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

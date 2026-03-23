@@ -1,0 +1,8 @@
+.gocache/
+.spec-workflow/
+runtime/
+*.exe
+*.log
+.codex.patch
+codex-mcp-capabilities.txt
+codex-mcp-probe.txt
