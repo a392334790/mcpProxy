@@ -1,0 +1,443 @@
+package mockauth
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"mcpProxy/internal/oauth"
+)
+
+type Server struct {
+	cfg *Config
+
+	mu            sync.Mutex
+	authorizeCode map[string]authorizeCode
+	refreshTokens map[string]refreshGrant
+	accessTokens  map[string]accessGrant
+}
+
+type apiResponse struct {
+	Success        bool           `json:"success"`
+	Code           string         `json:"code"`
+	Message        string         `json:"message"`
+	DisplayMessage string         `json:"display_message"`
+	TraceID        string         `json:"trace_id"`
+	Timestamp      time.Time      `json:"timestamp"`
+	Data           map[string]any `json:"data"`
+}
+
+type authorizeCode struct {
+	ClientID      string
+	RedirectURI   string
+	Scope         string
+	State         string
+	CodeChallenge string
+	ChallengeMeth string
+	UserID        string
+	UserName      string
+	ExpiresAt     time.Time
+}
+
+type refreshGrant struct {
+	ClientID  string
+	Scope     string
+	UserID    string
+	UserName  string
+	ExpiresAt time.Time
+	IssuedAt  time.Time
+}
+
+type accessGrant struct {
+	ClientID  string
+	Scope     string
+	UserID    string
+	UserName  string
+	ExpiresAt time.Time
+	IssuedAt  time.Time
+}
+
+func NewServer(cfg *Config) http.Handler {
+	s := &Server{
+		cfg:           cfg,
+		authorizeCode: map[string]authorizeCode{},
+		refreshTokens: map[string]refreshGrant{},
+		accessTokens:  map[string]accessGrant{},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleRoot)
+	mux.HandleFunc("/health", s.handleHealth)
+	mux.HandleFunc("/oauth2/authorize", s.handleAuthorize)
+	mux.HandleFunc("/oauth2/token", s.handleToken)
+	mux.HandleFunc("/oauth2/introspect", s.handleIntrospect)
+	return loggingMiddleware(mux)
+}
+
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	writeAPIResponse(w, r, http.StatusOK, true, "ok", "Mock auth center metadata loaded", "Mock 鉴权中心运行正常。", map[string]any{
+		"name":                "mock-auth-center",
+		"issuer":              s.cfg.Issuer,
+		"authorize_endpoint":  s.cfg.Issuer + "/oauth2/authorize",
+		"token_endpoint":      s.cfg.Issuer + "/oauth2/token",
+		"introspect_endpoint": s.cfg.Issuer + "/oauth2/introspect",
+		"health_endpoint":     s.cfg.Issuer + "/health",
+	})
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeAPIResponse(w, r, http.StatusOK, true, "ok", "Mock auth center is healthy", "Mock 鉴权中心运行正常。", map[string]any{
+		"status": "UP",
+	})
+}
+
+func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeOAuthError(w, r, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
+		return
+	}
+	query := r.URL.Query()
+	clientID := strings.TrimSpace(query.Get("client_id"))
+	redirectURI := strings.TrimSpace(query.Get("redirect_uri"))
+	responseType := strings.TrimSpace(query.Get("response_type"))
+	state := strings.TrimSpace(query.Get("state"))
+	codeChallenge := strings.TrimSpace(query.Get("code_challenge"))
+	codeChallengeMethod := strings.TrimSpace(query.Get("code_challenge_method"))
+	if responseType != "code" || clientID == "" || redirectURI == "" || state == "" || codeChallenge == "" {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_request", "missing oauth authorize parameters")
+		return
+	}
+	if codeChallengeMethod != "S256" {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_request", "only S256 PKCE is supported")
+		return
+	}
+	code, err := randomToken("code", 24)
+	if err != nil {
+		writeOAuthError(w, r, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	scope := strings.TrimSpace(query.Get("scope"))
+	if scope == "" {
+		scope = s.cfg.DefaultScope
+	}
+	grant := authorizeCode{
+		ClientID:      clientID,
+		RedirectURI:   redirectURI,
+		Scope:         scope,
+		State:         state,
+		CodeChallenge: codeChallenge,
+		ChallengeMeth: codeChallengeMethod,
+		UserID:        strings.TrimSpace(query.Get("mock_user_id")),
+		UserName:      strings.TrimSpace(query.Get("mock_user_name")),
+		ExpiresAt:     time.Now().Add(s.cfg.CodeTTL),
+	}
+	if grant.UserID == "" {
+		grant.UserID = s.cfg.DefaultUserID
+	}
+	if grant.UserName == "" {
+		grant.UserName = s.cfg.DefaultUserName
+	}
+	s.mu.Lock()
+	s.authorizeCode[code] = grant
+	s.mu.Unlock()
+
+	redirectTarget := redirectWithCode(redirectURI, code, state)
+	if s.cfg.Interactive && !s.cfg.AutoApprove {
+		writeHTML(w, http.StatusOK, authorizePage(grant.UserName, redirectTarget))
+		return
+	}
+	http.Redirect(w, r, redirectTarget, http.StatusFound)
+}
+
+func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeOAuthError(w, r, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_request", "failed to parse form")
+		return
+	}
+	switch strings.TrimSpace(r.Form.Get("grant_type")) {
+	case "authorization_code":
+		s.handleAuthorizationCode(w, r)
+	case "refresh_token":
+		s.handleRefreshToken(w, r)
+	default:
+		writeOAuthError(w, r, http.StatusBadRequest, "unsupported_grant_type", "grant type not supported")
+	}
+}
+
+func (s *Server) handleAuthorizationCode(w http.ResponseWriter, r *http.Request) {
+	code := strings.TrimSpace(r.Form.Get("code"))
+	clientID := strings.TrimSpace(r.Form.Get("client_id"))
+	redirectURI := strings.TrimSpace(r.Form.Get("redirect_uri"))
+	verifier := strings.TrimSpace(r.Form.Get("code_verifier"))
+
+	s.mu.Lock()
+	grant, ok := s.authorizeCode[code]
+	if ok {
+		delete(s.authorizeCode, code)
+	}
+	s.mu.Unlock()
+	if !ok || time.Now().After(grant.ExpiresAt) {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
+		return
+	}
+	if clientID != grant.ClientID || redirectURI != grant.RedirectURI {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_grant", "client_id or redirect_uri mismatch")
+		return
+	}
+	if oauth.ChallengeS256(verifier) != grant.CodeChallenge {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_grant", "PKCE verifier mismatch")
+		return
+	}
+	accessToken, refreshToken, accessGrant, refreshGrant, err := s.issueTokens(grant.ClientID, grant.Scope, grant.UserID, grant.UserName)
+	if err != nil {
+		writeOAuthError(w, r, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	s.storeIssuedTokens(accessToken, accessGrant, refreshToken, refreshGrant)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"token_type":    "Bearer",
+		"expires_in":    int(s.cfg.AccessTTL.Seconds()),
+		"scope":         grant.Scope,
+		"user_id":       grant.UserID,
+		"user_name":     grant.UserName,
+	})
+}
+
+func (s *Server) handleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	refreshToken := strings.TrimSpace(r.Form.Get("refresh_token"))
+	clientID := strings.TrimSpace(r.Form.Get("client_id"))
+	s.mu.Lock()
+	grant, ok := s.refreshTokens[refreshToken]
+	s.mu.Unlock()
+	if !ok || time.Now().After(grant.ExpiresAt) {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_grant", "refresh token is invalid or expired")
+		return
+	}
+	if clientID != "" && clientID != grant.ClientID {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_grant", "client_id mismatch")
+		return
+	}
+	accessToken, newRefreshToken, accessGrant, refreshGrant, err := s.issueTokens(grant.ClientID, grant.Scope, grant.UserID, grant.UserName)
+	if err != nil {
+		writeOAuthError(w, r, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	s.mu.Lock()
+	delete(s.refreshTokens, refreshToken)
+	s.mu.Unlock()
+	s.storeIssuedTokens(accessToken, accessGrant, newRefreshToken, refreshGrant)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"access_token":  accessToken,
+		"refresh_token": newRefreshToken,
+		"token_type":    "Bearer",
+		"expires_in":    int(s.cfg.AccessTTL.Seconds()),
+		"scope":         grant.Scope,
+		"user_id":       grant.UserID,
+		"user_name":     grant.UserName,
+	})
+}
+
+func (s *Server) handleIntrospect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeOAuthError(w, r, http.StatusMethodNotAllowed, "invalid_request", "method not allowed")
+		return
+	}
+	token, err := extractToken(r)
+	if err != nil {
+		writeOAuthError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	s.mu.Lock()
+	grant, ok := s.accessTokens[token]
+	s.mu.Unlock()
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false, "expired": false})
+		return
+	}
+	if time.Now().After(grant.ExpiresAt) {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false, "expired": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active":    true,
+		"expired":   false,
+		"user_id":   grant.UserID,
+		"user_name": grant.UserName,
+		"tenant_id": "t001",
+		"roles":     []string{"mcp_user"},
+		"scopes":    strings.Fields(grant.Scope),
+		"exp":       grant.ExpiresAt.Unix(),
+		"client_id": grant.ClientID,
+	})
+}
+
+func (s *Server) issueTokens(clientID, scope, userID, userName string) (string, string, accessGrant, refreshGrant, error) {
+	accessToken, err := randomToken("atk", 24)
+	if err != nil {
+		return "", "", accessGrant{}, refreshGrant{}, err
+	}
+	refreshToken, err := randomToken("rtk", 24)
+	if err != nil {
+		return "", "", accessGrant{}, refreshGrant{}, err
+	}
+	now := time.Now()
+	access := accessGrant{ClientID: clientID, Scope: scope, UserID: userID, UserName: userName, IssuedAt: now, ExpiresAt: now.Add(s.cfg.AccessTTL)}
+	refresh := refreshGrant{ClientID: clientID, Scope: scope, UserID: userID, UserName: userName, IssuedAt: now, ExpiresAt: now.Add(s.cfg.RefreshTTL)}
+	return accessToken, refreshToken, access, refresh, nil
+}
+
+func (s *Server) storeIssuedTokens(accessToken string, access accessGrant, refreshToken string, refresh refreshGrant) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accessTokens[accessToken] = access
+	s.refreshTokens[refreshToken] = refresh
+}
+
+func extractToken(r *http.Request) (string, error) {
+	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return "", fmt.Errorf("read body: %w", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return "", fmt.Errorf("decode json body: %w", err)
+		}
+		token, _ := payload["token"].(string)
+		if strings.TrimSpace(token) == "" {
+			return "", fmt.Errorf("token is required")
+		}
+		return token, nil
+	}
+	if err := r.ParseForm(); err != nil {
+		return "", fmt.Errorf("parse form: %w", err)
+	}
+	token := strings.TrimSpace(r.Form.Get("token"))
+	if token == "" {
+		return "", fmt.Errorf("token is required")
+	}
+	return token, nil
+}
+
+func redirectWithCode(redirectURI, code, state string) string {
+	target, err := url.Parse(redirectURI)
+	if err != nil {
+		return redirectURI
+	}
+	query := target.Query()
+	query.Set("code", code)
+	query.Set("state", state)
+	target.RawQuery = query.Encode()
+	return target.String()
+}
+
+func randomToken(prefix string, size int) (string, error) {
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return prefix + "_" + base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func writeJSON(w http.ResponseWriter, status int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeAPIResponse(w http.ResponseWriter, r *http.Request, status int, success bool, code, message, display string, data map[string]any) {
+	traceID := traceID(r)
+	w.Header().Set("X-Trace-Id", traceID)
+	if data == nil {
+		data = map[string]any{}
+	}
+	writeJSON(w, status, apiResponse{
+		Success:        success,
+		Code:           code,
+		Message:        message,
+		DisplayMessage: display,
+		TraceID:        traceID,
+		Timestamp:      time.Now(),
+		Data:           data,
+	})
+}
+
+func writeOAuthError(w http.ResponseWriter, r *http.Request, status int, code, description string) {
+	traceID := traceID(r)
+	w.Header().Set("X-Trace-Id", traceID)
+	writeJSON(w, status, map[string]any{
+		"error":             code,
+		"error_description": description,
+		"display_message":   oauthDisplayMessage(code, description),
+		"trace_id":          traceID,
+		"timestamp":         time.Now(),
+	})
+}
+
+func writeHTML(w http.ResponseWriter, status int, html string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = io.WriteString(w, html)
+}
+
+func authorizePage(userName, redirectTarget string) string {
+	return fmt.Sprintf(`<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>Mock Auth</title></head>
+<body style="font-family:Arial,sans-serif;padding:32px;">
+  <h2>Mock 鉴权中心</h2>
+  <p>当前登录用户：%s</p>
+  <p><a href="%s">点击授权并继续</a></p>
+</body>
+</html>`, userName, redirectTarget)
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("mock-auth %s %s", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func traceID(r *http.Request) string {
+	if trace := strings.TrimSpace(r.Header.Get("X-Trace-Id")); trace != "" {
+		return trace
+	}
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("trace-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf)
+}
+
+func oauthDisplayMessage(code, description string) string {
+	switch code {
+	case "invalid_request":
+		return "请求参数不完整或格式不正确，请检查后重试。"
+	case "unsupported_grant_type":
+		return "当前授权类型不受支持。"
+	case "invalid_grant":
+		return "授权码或刷新令牌无效，请重新发起登录。"
+	case "server_error":
+		return "鉴权中心处理请求失败，请稍后重试。"
+	default:
+		if description != "" {
+			return description
+		}
+		return "鉴权请求失败，请稍后重试。"
+	}
+}

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Gateway 架构图与时序图</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: white;
+            font-size: 2.5em;
+            margin-bottom: 40px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        h2 {
+            color: #2d3748;
+            font-size: 1.8em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
+        }
+        .section {
+            background: white;
+            border-radius: 16px;
+            padding: 40px;
+            margin-bottom: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        }
+        
+        /* 清晰架构图样式 */
+        .architecture-clear {
+            background: #fafbfc;
+            border-radius: 16px;
+            padding: 30px;
+        }
+        
+        .arch-flow {
+            margin-bottom: 35px;
+        }
+        
+        .flow-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+        
+        .flow-badge {
+            padding: 5px 12px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: 600;
+            color: white;
+        }
+        .flow-badge.main { background: #6366f1; }
+        .flow-badge.oauth { background: #0284c7; }
+        .flow-badge.validate { background: #16a34a; }
+        
+        .flow-name {
+            font-size: 1em;
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0;
+            flex-wrap: wrap;
+            padding: 15px 0;
+        }
+        
+        .arch-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 14px 20px;
+            border-radius: 10px;
+            text-align: center;
+            min-width: 130px;
+        }
+        
+        .arch-box.agent { background: #eef2ff; border: 2px solid #a5b4fc; color: #4338ca; }
+        .arch-box.proxy { background: #fce7f3; border: 2px solid #f9a8d4; color: #be185d; }
+        .arch-box.browser { background: #e0f2fe; border: 2px solid #7dd3fc; color: #0369a1; }
+        .arch-box.auth { background: #dcfce7; border: 2px solid #86efac; color: #15803d; }
+        .arch-box.gateway { background: #fef3c7; border: 2px solid #fcd34d; color: #b45309; }
+        .arch-box.mcp { background: #cffafe; border: 2px solid #67e8f9; color: #0e7490; }
+        
+        .box-icon {
+            font-size: 1.8em;
+            margin-bottom: 6px;
+        }
+        
+        .box-title {
+            font-weight: 700;
+            font-size: 0.85em;
+            margin-bottom: 3px;
+        }
+        
+        .box-desc {
+            font-size: 0.7em;
+            opacity: 0.8;
+        }
+        
+        .arch-arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 0 12px;
+            color: #6b7280;
+        }
+        
+        .arrow-symbol {
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+        
+        .arrow-text {
+            font-size: 0.65em;
+            color: #9ca3af;
+            white-space: nowrap;
+            margin-top: 2px;
+        }
+        
+        /* 组件角色说明 */
+        .component-roles {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-top: 25px;
+            padding-top: 25px;
+            border-top: 2px dashed #e5e7eb;
+        }
+        
+        .component-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e5e7eb;
+        }
+        
+        .component-icon {
+            font-size: 1.3em;
+        }
+        
+        .component-info h4 {
+            font-size: 0.85em;
+            color: #1f2937;
+            margin-bottom: 3px;
+        }
+        
+        .component-info p {
+            font-size: 0.75em;
+            color: #6b7280;
+            line-height: 1.4;
+        }
+        
+        /* Mermaid 图表 */
+        .mermaid-container {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            overflow-x: auto;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+        
+        /* 图表标题 */
+        .diagram-title {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+        
+        /* 流程说明 */
+        .flow-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .flow-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px;
+            background: #f8fafc;
+            border-radius: 8px;
+        }
+        .step-number {
+            min-width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.85em;
+        }
+        .step-content {
+            flex: 1;
+        }
+        .step-content strong {
+            color: #2d3748;
+        }
+        .step-content span {
+            color: #64748b;
+        }
+        
+        /* 打印优化 */
+        @media print {
+            body {
+                background: white;
+                padding: 20px;
+            }
+            .section {
+                box-shadow: none;
+                break-inside: avoid;
+            }
+        }
+        
+        /* 响应式 */
+        @media (max-width: 768px) {
+            h1 { font-size: 1.8em; }
+            h2 { font-size: 1.4em; }
+            .section { padding: 20px; }
+            .arch-box { min-width: 100px; padding: 10px 14px; }
+            .box-icon { font-size: 1.5em; }
+            .component-roles { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MCP Gateway 架构图与时序图</h1>
+        
+        <!-- 总体架构设计 -->
+        <div class="section">
+            <h2>一、总体架构设计</h2>
+            
+            <div class="architecture-clear">
+                
+                <!-- 流程1：请求主链路 -->
+                <div class="arch-flow">
+                    <div class="flow-header">
+                        <span class="flow-badge main">流程1</span>
+                        <span class="flow-name">请求主链路</span>
+                    </div>
+                    <div class="flow-diagram">
+                        <div class="arch-box agent">
+                            <div class="box-icon">🤖</div>
+                            <div class="box-title">第三方智能体</div>
+                            <div class="box-desc">MCP Consumer</div>
+                        </div>
+                        <div class="arch-arrow">
+                            <span class="arrow-symbol">→</span>
+                            <span class="arrow-text">POST /mcp</span>
+                        </div>
+                        <div class="arch-box proxy">
+                            <div class="box-icon">🔐</div>
+                            <div class="box-title">本地 Auth Proxy</div>
+                            <div class="box-desc">Token管理</div>
+                        </div>
+                        <div class="arch-arrow">
+                            <span class="arrow-symbol">→</span>
+                            <span class="arrow-text">Bearer Token</span>
+                        </div>
+                        <div class="arch-box gateway">
+                            <div class="box-icon">🚪</div>
+                            <div class="box-title">MCP Gateway</div>
+                            <div class="box-desc">Token校验</div>
+                        </div>
+                        <div class="arch-arrow">
+                            <span class="arrow-symbol">→</span>
+                            <span class="arrow-text">转发</span>
+                        </div>
+                        <div class="arch-box mcp">
+                            <div class="box-icon">⚙️</div>
+                            <div class="box-title">下游 MCP 服务</div>
+                            <div class="box-desc">业务处理</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 流程2：OAuth 登录流程 -->
+                <div class="arch-flow">
+                    <div class="flow-header">
+                        <span class="flow-badge oauth">流程2</span>
+                        <span class="flow-name">OAuth 登录流程（首次访问无 Token 时触发）</span>
+                    </div>
+                    <div class="flow-diagram">
+                        <div class="arch-box proxy">
+                            <div class="box-icon">🔐</div>
+                            <div class="box-title">本地 Auth Proxy</div>
+                            <div class="box-desc">OAuth 客户端</div>
+                        </div>
+                        <div class="arch-arrow">
+                            <span class="arrow-symbol">↔</span>
+                            <span class="arrow-text">PKCE 授权</span>
+                        </div>
+                        <div class="arch-box browser">
+                            <div class="box-icon">🌐</div>
+                            <div class="box-title">系统浏览器</div>
+                            <div class="box-desc">用户登录</div>
+                        </div>
+                        <div class="arch-arrow">
+                            <span class="arrow-symbol">↔</span>
+                            <span class="arrow-text">OAuth2</span>
+                        </div>
+                        <div class="arch-box auth">
+                            <div class="box-icon">🔑</div>
+                            <div class="box-title">公司鉴权中心</div>
+                            <div class="box-desc">OAuth2 Server</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 流程3：Token 校验流程 -->
+                <div class="arch-flow">
+                    <div class="flow-header">
+                        <span class="flow-badge validate">流程3</span>
+                        <span class="flow-name">Token 校验流程（每次请求时执行）</span>
+                    </div>
+                    <div class="flow-diagram">
+                        <div class="arch-box gateway">
+                            <div class="box-icon">🚪</div>
+                            <div class="box-title">MCP Gateway</div>
+                            <div class="box-desc">网关鉴权</div>
+                        </div>
+                        <div class="arch-arrow">
+                            <span class="arrow-symbol">→</span>
+                            <span class="arrow-text">introspect</span>
+                        </div>
+                        <div class="arch-box auth">
+                            <div class="box-icon">🔑</div>
+                            <div class="box-title">公司鉴权中心</div>
+                            <div class="box-desc">Token 校验</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 组件角色说明 -->
+                <div class="component-roles">
+                    <div class="component-item">
+                        <span class="component-icon">🤖</span>
+                        <div class="component-info">
+                            <h4>第三方智能体</h4>
+                            <p>仅作为 MCP Consumer，不直接参与 OAuth 登录流程</p>
+                        </div>
+                    </div>
+                    <div class="component-item">
+                        <span class="component-icon">🔐</span>
+                        <div class="component-info">
+                            <h4>本地 MCP Auth Proxy</h4>
+                            <p>负责浏览器登录、Token 存储、自动刷新、请求转发</p>
+                        </div>
+                    </div>
+                    <div class="component-item">
+                        <span class="component-icon">🌐</span>
+                        <div class="component-info">
+                            <h4>系统浏览器</h4>
+                            <p>用户登录界面，完成 OAuth 授权</p>
+                        </div>
+                    </div>
+                    <div class="component-item">
+                        <span class="component-icon">🔑</span>
+                        <div class="component-info">
+                            <h4>公司鉴权中心</h4>
+                            <p>提供授权、换 Token、校验 Token 等 OAuth2 能力</p>
+                        </div>
+                    </div>
+                    <div class="component-item">
+                        <span class="component-icon">🚪</span>
+                        <div class="component-info">
+                            <h4>cloud-mcp-gateway</h4>
+                            <p>校验 Bearer Token，提取身份信息，注入身份头转发</p>
+                        </div>
+                    </div>
+                    <div class="component-item">
+                        <span class="component-icon">⚙️</span>
+                        <div class="component-info">
+                            <h4>下游 MCP 服务</h4>
+                            <p>接收网关转发请求，可按用户身份做进一步授权</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 时序图 -->
+        <div class="section">
+            <h2>二、时序图</h2>
+            
+            <!-- 场景1：首次访问 -->
+            <div class="diagram-title">场景 1：首次访问（无 Token）</div>
+            <div class="mermaid-container">
+                <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Agent as 第三方智能体
+    participant Proxy as 本地 Auth Proxy
+    participant Browser as 系统浏览器
+    participant Auth as 公司鉴权中心
+    participant Gateway as MCP Gateway
+    participant MCP as 下游 MCP 服务
+
+    Agent->>Proxy: POST /mcp
+    Proxy->>Proxy: 检查本地 Token，不存在
+    Proxy->>Browser: 打开 /authorize (PKCE)
+    Proxy-->>Agent: 返回提示：请完成浏览器登录后重试
+    Browser->>Auth: 用户登录并授权
+    Auth-->>Browser: 302 回调到本地代理
+    Browser->>Proxy: GET /auth/callback?code=xxx&state=yyy
+    Proxy->>Proxy: 校验 state
+    Proxy->>Auth: POST /token(code + code_verifier)
+    Auth-->>Proxy: access_token + refresh_token
+    Proxy->>Proxy: 安全保存 Token
+    Note over Agent,Proxy: 用户在智能体中再次发起 MCP 请求
+    Agent->>Proxy: POST /mcp
+    Proxy->>Gateway: POST /mcp + Authorization: Bearer xxx
+    Gateway->>Auth: validate/introspect token
+    Auth-->>Gateway: active=true + user info
+    Gateway->>MCP: 转发请求 + 注入身份头
+    MCP-->>Gateway: 响应
+    Gateway-->>Proxy: 响应
+    Proxy-->>Agent: 响应
+                </pre>
+            </div>
+            
+            <!-- 场景2：有效Token -->
+            <div class="diagram-title" style="margin-top: 30px;">场景 2：后续访问（本地已有有效 Token）</div>
+            <div class="mermaid-container">
+                <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Agent as 第三方智能体
+    participant Proxy as 本地 Auth Proxy
+    participant Gateway as MCP Gateway
+    participant Auth as 公司鉴权中心
+    participant MCP as 下游 MCP 服务
+
+    Agent->>Proxy: POST /mcp
+    Proxy->>Proxy: 检查 Token，有效
+    Proxy->>Gateway: POST /mcp + Authorization
+    Gateway->>Auth: validate/introspect
+    Auth-->>Gateway: active=true
+    Gateway->>MCP: 转发请求
+    MCP-->>Gateway: 响应
+    Gateway-->>Proxy: 响应
+    Proxy-->>Agent: 响应
+                </pre>
+            </div>
+            
+            <!-- 场景3：Token过期 -->
+            <div class="diagram-title" style="margin-top: 30px;">场景 3：Token 过期（自动刷新）</div>
+            <div class="mermaid-container">
+                <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Agent as 第三方智能体
+    participant Proxy as 本地 Auth Proxy
+    participant Gateway as MCP Gateway
+    participant Auth as 公司鉴权中心
+
+    Agent->>Proxy: POST /mcp
+    Proxy->>Gateway: POST /mcp + 旧 Token
+    Gateway->>Auth: validate/introspect
+    Auth-->>Gateway: expired
+    Gateway-->>Proxy: 401 token_expired
+    Proxy->>Auth: POST /token(grant_type=refresh_token)
+    Auth-->>Proxy: 新 access_token
+    Proxy->>Proxy: 更新 Token
+    Proxy->>Gateway: 自动重放原请求
+    Gateway->>Auth: validate/introspect
+    Auth-->>Gateway: active=true
+    Gateway-->>Proxy: 200
+    Proxy-->>Agent: 200
+                </pre>
+            </div>
+            
+            <!-- 场景4：刷新失败 -->
+            <div class="diagram-title" style="margin-top: 30px;">场景 4：刷新失败（重新登录）</div>
+            <div class="mermaid-container">
+                <pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Agent as 第三方智能体
+    participant Proxy as 本地 Auth Proxy
+    participant Browser as 系统浏览器
+    participant Auth as 公司鉴权中心
+
+    Agent->>Proxy: POST /mcp
+    Proxy->>Proxy: Refresh Token 失效
+    Proxy->>Browser: 再次打开登录页
+    Proxy-->>Agent: 返回提示：登录已过期，请重新登录后重试
+    Browser->>Auth: 登录
+    Auth-->>Browser: 回调本地代理
+    Browser->>Proxy: GET /auth/callback
+    Proxy->>Auth: 换取新 Token
+    Auth-->>Proxy: 新 Token
+    Proxy->>Proxy: 保存新 Token
+                </pre>
+            </div>
+        </div>
+        
+        <!-- 核心流程总结 -->
+        <div class="section">
+            <h2>三、核心流程总结</h2>
+            <div class="flow-steps">
+                <div class="flow-step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <strong>首次请求</strong><br>
+                        <span>第三方智能体发送 MCP 请求 → 本地代理检测无 Token → 拉起浏览器登录 → 用户完成授权 → 回调换取 Token → 安全存储</span>
+                    </div>
+                </div>
+                <div class="flow-step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <strong>正常请求</strong><br>
+                        <span>本地代理检查 Token 有效 → 添加 Authorization 头 → 转发到网关 → 网关校验 Token → 转发到下游服务</span>
+                    </div>
+                </div>
+                <div class="flow-step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <strong>Token 过期</strong><br>
+                        <span>网关返回 401 token_expired → 本地代理使用 Refresh Token 刷新 → 自动重放原请求（对调用方透明）</span>
+                    </div>
+                </div>
+                <div class="flow-step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <strong>刷新失败</strong><br>
+                        <span>Refresh Token 失效 → 本地代理重新拉起浏览器登录 → 用户重新授权 → 获取新 Token</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                primaryColor: '#e8e8e8',
+                primaryTextColor: '#000000',
+                primaryBorderColor: '#000000',
+                lineColor: '#000000',
+                secondaryColor: '#d0d0d0',
+                tertiaryColor: '#f8fafc',
+                fontFamily: 'Segoe UI, Microsoft YaHei, sans-serif',
+                fontSize: '14px',
+                actorBkg: '#e8e8e8',
+                actorBorder: '#000000',
+                actorTextColor: '#000000',
+                actorLineColor: '#000000',
+                signalColor: '#000000',
+                signalTextColor: '#000000',
+                labelBoxBkgColor: '#e8e8e8',
+                labelBoxBorderColor: '#000000',
+                labelTextColor: '#000000',
+                loopTextColor: '#000000',
+                noteBorderColor: '#000000',
+                noteBkgColor: '#fff5ad',
+                noteTextColor: '#000000',
+                activationBorderColor: '#000000',
+                activationBkgColor: '#e8e8e8'
+            },
+            sequence: {
+                diagramMarginX: 20,
+                diagramMarginY: 20,
+                actorMargin: 60,
+                width: 150,
+                height: 65,
+                boxMargin: 10,
+                boxTextMargin: 5,
+                noteMargin: 10,
+                messageMargin: 35,
+                mirrorActors: false,
+                bottomMarginAdj: 1,
+                useMaxWidth: true,
+                rightAngles: false,
+                showSequenceNumbers: true
+            }
+        });
+    </script>
+</body>
+</html>

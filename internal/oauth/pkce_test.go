@@ -1,0 +1,12 @@
+package oauth
+
+import "testing"
+
+func TestChallengeS256(t *testing.T) {
+	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+	want := "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+	got := ChallengeS256(verifier)
+	if got != want {
+		t.Fatalf("unexpected challenge: got %q want %q", got, want)
+	}
+}

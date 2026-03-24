@@ -1,0 +1,150 @@
+﻿package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"mcpProxy/internal/envfile"
+)
+
+type Config struct {
+	ListenAddr      string
+	CallbackPath    string
+	RedirectURL     string
+	UpstreamMCPURL  string
+	AuthorizeURL    string
+	TokenURL        string
+	ClientID        string
+	Scope           string
+	TokenFile       string
+	AutoOpenBrowser bool
+	RefreshSkew     time.Duration
+	LoginStateTTL   time.Duration
+	TokenTimeout    time.Duration
+	Debug           bool
+}
+
+func Load() (*Config, error) {
+	if err := envfile.Load(strings.TrimSpace(os.Getenv("MCP_PROXY_CONFIG_FILE"))); err != nil {
+		return nil, err
+	}
+	listenAddr := envOrDefault("MCP_PROXY_LISTEN_ADDR", "127.0.0.1:8765")
+	callbackPath := envOrDefault("MCP_PROXY_CALLBACK_PATH", "/auth/callback")
+	redirectURL := envOrDefault("MCP_PROXY_REDIRECT_URL", buildRedirectURL(listenAddr, callbackPath))
+	tokenFile, err := defaultTokenFile()
+	if err != nil {
+		return nil, err
+	}
+
+	refreshSkew, err := durationEnv("MCP_PROXY_REFRESH_SKEW", 60*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	loginStateTTL, err := durationEnv("MCP_PROXY_LOGIN_STATE_TTL", 10*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	tokenTimeout, err := durationEnv("MCP_PROXY_TOKEN_TIMEOUT", 15*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := &Config{
+		ListenAddr:      listenAddr,
+		CallbackPath:    callbackPath,
+		RedirectURL:     redirectURL,
+		UpstreamMCPURL:  strings.TrimSpace(os.Getenv("MCP_PROXY_UPSTREAM_MCP_URL")),
+		AuthorizeURL:    strings.TrimSpace(os.Getenv("MCP_PROXY_AUTHORIZE_URL")),
+		TokenURL:        strings.TrimSpace(os.Getenv("MCP_PROXY_TOKEN_URL")),
+		ClientID:        strings.TrimSpace(os.Getenv("MCP_PROXY_CLIENT_ID")),
+		Scope:           envOrDefault("MCP_PROXY_SCOPE", "mcp.invoke mcp.read"),
+		TokenFile:       envOrDefault("MCP_PROXY_TOKEN_FILE", tokenFile),
+		AutoOpenBrowser: boolEnv("MCP_PROXY_AUTO_OPEN_BROWSER", true),
+		RefreshSkew:     refreshSkew,
+		LoginStateTTL:   loginStateTTL,
+		TokenTimeout:    tokenTimeout,
+		Debug:           boolEnv("MCP_PROXY_DEBUG", false),
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (c *Config) Validate() error {
+	var missing []string
+	for key, value := range map[string]string{
+		"MCP_PROXY_UPSTREAM_MCP_URL": c.UpstreamMCPURL,
+		"MCP_PROXY_AUTHORIZE_URL":    c.AuthorizeURL,
+		"MCP_PROXY_TOKEN_URL":        c.TokenURL,
+		"MCP_PROXY_CLIENT_ID":        c.ClientID,
+	} {
+		if strings.TrimSpace(value) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+	if !strings.HasPrefix(c.CallbackPath, "/") {
+		return errors.New("MCP_PROXY_CALLBACK_PATH must start with '/'")
+	}
+	return nil
+}
+
+func buildRedirectURL(listenAddr, callbackPath string) string {
+	host := listenAddr
+	if strings.HasPrefix(host, ":") {
+		host = "127.0.0.1" + host
+	}
+	if strings.HasPrefix(host, "0.0.0.0:") {
+		host = strings.Replace(host, "0.0.0.0", "127.0.0.1", 1)
+	}
+	return "http://" + host + callbackPath
+}
+
+func defaultTokenFile() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user config dir: %w", err)
+	}
+	return filepath.Join(configDir, "mcp-proxy", "token.dat"), nil
+}
+
+func envOrDefault(key, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func boolEnv(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func durationEnv(key string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}

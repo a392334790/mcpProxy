@@ -1,0 +1,77 @@
+package storage
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"mcpProxy/internal/model"
+)
+
+type TokenStore interface {
+	Load() (*model.TokenSet, error)
+	Save(*model.TokenSet) error
+	Delete() error
+}
+
+type FileTokenStore struct {
+	path string
+}
+
+func NewFileTokenStore(path string) (*FileTokenStore, error) {
+	if path == "" {
+		return nil, errors.New("token store path is empty")
+	}
+	return &FileTokenStore{path: path}, nil
+	}
+
+func (s *FileTokenStore) Load() (*model.TokenSet, error) {
+	raw, err := os.ReadFile(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read token file: %w", err)
+	}
+	plain, err := decrypt(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt token file: %w", err)
+	}
+	var token model.TokenSet
+	if err := json.Unmarshal(plain, &token); err != nil {
+		return nil, fmt.Errorf("unmarshal token: %w", err)
+	}
+	return &token, nil
+	}
+
+func (s *FileTokenStore) Save(token *model.TokenSet) error {
+	if token == nil {
+		return errors.New("token is nil")
+	}
+	plain, err := json.Marshal(token)
+	if err != nil {
+		return fmt.Errorf("marshal token: %w", err)
+	}
+	cipher, err := encrypt(plain)
+	if err != nil {
+		return fmt.Errorf("encrypt token: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf("create token directory: %w", err)
+	}
+	if err := os.WriteFile(s.path, cipher, 0o600); err != nil {
+		return fmt.Errorf("write token file: %w", err)
+	}
+	return nil
+	}
+
+func (s *FileTokenStore) Delete() error {
+	err := os.Remove(s.path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("delete token file: %w", err)
+	}
+	return nil
+	}
+
